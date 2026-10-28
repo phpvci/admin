@@ -89,18 +89,28 @@ function _log(string $message, string $severity, string $file, int $line): bool 
     return error_log($log, 3, PATH_LOGS);
 }
 
-set_error_handler(function ($severity, $message, $file, $line) {
+/**
+ * Last error message.
+ * 
+ * @var string|null $LAST_ERROR_MESSAGE
+ */
+$LAST_ERROR_MESSAGE = null;
+
+set_error_handler(function ($severity, $message, $file, $line) use (&$LAST_ERROR_MESSAGE): bool {
+    $LAST_ERROR_MESSAGE = $message;
     _log($message, 'ERROR', $file, $line);
     return true;
 });
 
-register_shutdown_function(function () {
+register_shutdown_function(function () use (&$LAST_ERROR_MESSAGE) {
     $error = error_get_last();
 
     if ($error) {
+        $LAST_ERROR_MESSAGE = $error['message'];
         _log($error['message'], 'FATAL', $error['file'], $error['line']);
     }
 });
+
 
 /**
  * Resolve a usable PHP CLI binary path.
@@ -1839,12 +1849,17 @@ final class PHPVCI
 
         $log = [];
         $err = null;
-        $updated = self::writeAppConfig($newPath, $packagesDir, false, $err);
-        $metadata = self::restoreMetadata($newPath);
+        $updated = false;
+        $metadata = self::restoreMetadata($newPath, $log);
 
-        $log[] = ($metadata > 0)
-            ? "✔ {$metadata} version {$version} specific files was restored"
-            : "⚠ Could not restore {$version} specific files.";
+        if($metadata === 0){
+             $log[] = "Check project file permission.";
+            self::json(false, implode("\n", $log));
+        }
+
+        $updated = self::writeAppConfig($newPath, $packagesDir, false, $err);
+
+        $log[] = "✔ {$metadata} version {$version} specific files was restored";
 
         $log[] = $updated
             ? "✔ .phpvci.php updated → {$version}"
@@ -1879,7 +1894,7 @@ final class PHPVCI
      * 
      * @return int Number of successfully restored files.
      */
-    private static function restoreMetadata(string $newPath): int
+    private static function restoreMetadata(string $newPath, array &$log): int
     {
         $basePath = readlink($newPath) ?: realpath($newPath) ?: $newPath;
         $basePath = rtrim($basePath, '/');
@@ -1890,9 +1905,6 @@ final class PHPVCI
             PROJECT_APP_ROOT . 'system/Boot.php'
                 => $metadataPath . '/system/Boot.php',
 
-            PROJECT_APP_ROOT . 'bootstrap/constants.php'
-                => $metadataPath . '/bootstrap/constants.php',
-
             PROJECT_APP_ROOT . 'novakit'
                 => $metadataPath . '/novakit',
         ];
@@ -1900,16 +1912,112 @@ final class PHPVCI
         $restored = 0;
 
         foreach ($files as $destination => $source) {
+            error_clear_last();
+
             if (!is_file($source)) {
+                $log[] = "⚠ Source file '{$source}' not found.";
                 continue;
             }
 
-            if (@copy($source, $destination)) {
-                $restored++;
+            if (!is_dir(dirname($destination))) {
+                $log[] = "⚠ Destination directory '" . dirname($destination) . "' does not exist.";
+                continue;
             }
+
+            if (is_file($destination) && !is_writable($destination)) {
+                if (!@chmod($destination, 0644)) {
+                    $log[] = "⚠ Cannot make destination '{$destination}' writable.";
+                    $log[] = self::getLastError();
+
+                    $info = [
+                        'chmod_result' => false
+                    ];
+
+                    $log[] = self::getFileDebugInfo(
+                        $destination,
+                        false,
+                        $info
+                    );
+                    continue;
+                }
+            }
+
+            if (copy($source, $destination)) {
+                $log[] = "✔ File '{$destination}' was restored.";
+                $restored++;
+                continue;
+            }
+
+            $log[] = "⚠ Could not restore file '{$destination}'.";
+            $log[] = self::getLastError();
+
+            $info = [
+                'copy_result'     => false,
+                'source_file'    => $source,
+                'source_exists'   => file_exists($source),
+                'source_is_file'  => is_file($source),
+                'source_is_dir'   => is_dir($source),
+                'source_readable' => is_readable($source),
+            ];
+
+            $log[] = self::getFileDebugInfo(
+                $destination,
+                false,
+                $info
+            );
         }
 
         return $restored;
+    }
+
+    /**
+     * Undocumented function
+     *
+     * @return string
+     */
+    public static function getLastError(): string 
+    {
+        $error = error_get_last();
+        return $error['message'] 
+            ?? $GLOBALS['LAST_ERROR_MESSAGE'] 
+            ?? 'Unknown copy error.';
+    }
+
+    /**
+     * Undocumented function
+     *
+     * @param string $filename
+     * @param boolean $asArray
+     * @param array $info
+     * @return array|string
+     */
+    public static function getFileDebugInfo(
+        string $filename, 
+        bool $asArray = true, 
+        array &$info = []
+    ): array|string 
+    {
+        $permissions = fileperms($filename);
+        $info = array_merge($info, [
+            'file'        => $filename,
+            'is_file'     => is_file($filename),
+            'is_dir'      => is_dir($filename),
+            'is_link'     => is_link($filename),
+            'permissions' => ($permissions !== false)
+                ? substr(sprintf('%o', $permissions), -4)
+                : null,
+            'owner'         => fileowner($filename),
+            'process_owner' => function_exists('posix_geteuid')
+                ? posix_geteuid()
+                : null,
+            'error'        => self::getLastError(),
+        ]);
+
+        if($asArray){
+            return $info;
+        }
+
+        return json_encode($info, JSON_UNESCAPED_SLASHES);
     }
 
     /**
@@ -2000,6 +2108,7 @@ final class PHPVCI
         ];
 
         $imported = 0;
+        $log = [];
 
         foreach ($targets as $source => $destination) {
             if (!is_dir($source)) {
@@ -2022,7 +2131,6 @@ final class PHPVCI
 
                 $relPath = substr($srcPath, strlen($source));
 
-                // Skip plugins directory entirely
                 if (
                     $relPath === 'plugins'
                     || str_starts_with($relPath, 'plugins' . DIRECTORY_SEPARATOR)
@@ -2032,9 +2140,17 @@ final class PHPVCI
 
                 $destPath = $destination . $relPath;
 
+                error_clear_last();
+
                 if ($item->isDir()) {
-                    if (!is_dir($destPath)) {
-                        mkdir($destPath, 0755, true);
+                    if (!is_dir($destPath) && !mkdir($destPath, 0755, true)) {
+                        $imported = 0;
+
+                        $log[] = "⚠ Failed to create directory: '{$destPath}'.";
+                        $log[] = self::getLastError();
+                        unlink($tmpRoot);
+
+                        break;
                     }
 
                     continue;
@@ -2042,18 +2158,37 @@ final class PHPVCI
 
                 $destDir = dirname($destPath);
 
-                if (!is_dir($destDir)) {
-                    mkdir($destDir, 0755, true);
+                if (!is_dir($destDir) && !mkdir($destDir, 0755, true)) {
+                    $imported = 0;
+
+                    $log[] = "⚠ Failed to create directory: '{$destDir}'.";
+                    $log[] = self::getLastError();
+
+                    unlink($tmpRoot);
+                    break;
                 }
 
-                if (copy($srcPath, $destPath)) {
-                    $imported++;
+                if (!copy($srcPath, $destPath)) {
+                    $imported = 0;
+
+                    $log[] = "⚠ Could not restore file '{$destination}'.";
+                    $log[] = self::getLastError();
+
+                    unlink($tmpRoot);
+                    break;
                 }
+
+                $log[] = "✔ File '{$destPath}' was imported.";
+                $imported++;
             }
         }
 
         if ($imported === 0) {
-            self::json(false, 'No files were imported. Check file permissions.');
+            self::json(false, 
+            ($log === [])
+                ? 'No files were imported. Check file permissions.' 
+                : implode("\n", $log) 
+            );
         }
 
         self::removeModules();
@@ -2062,6 +2197,7 @@ final class PHPVCI
             "{$tmpRoot}system/"    => PROJECT_APP_ROOT . 'system/'
         ]);
 
+        error_clear_last();
         $novakit = "{$metadataPath}/novakit";
 
         if (is_file($novakit)) {
@@ -2092,10 +2228,16 @@ final class PHPVCI
         $composer = self::optimizeAutoload();
 
         $log[] = $composer['output'] ?? 'Composer optimization completed.';
+        $log[] = self::getLastError();
 
         self::json(true, implode("\n", $log));
     }
 
+    /**
+     * Undocumented function
+     *
+     * @return void
+     */
     private static function resetSetup(): void 
     {
         if(is_file(PATH_ADMIN_CONFIG_FILE)){
@@ -2322,31 +2464,28 @@ final class PHPVCI
         $conf = null;
         $comment = <<<COMMENT
         /**
-         * Luminova shared Module Autoload Configuration (phpvci)
+         * Framework phpvci autoload configuration.
          *
-         * Defines the shared framework installation paths and version constraint
-         * used by the bootloader.
+         * Defines how the bootloader resolves framework core paths and autoload strategy.
+         * This file is loaded during early bootstrap and overrides default resolution logic.
          *
-         * Configuration options:
-         * - enabled: Enables or disables the shared framework installation.
-         * - version: Required framework version constraint.
-         * - paths.root: Shared framework installation root.
-         * - paths.target: Target framework release directory.
+         * Modes:
+         * - resolve.paths: enables shared framework installation
+         * - resolve.autoloader:
+         *      auto     → detect Composer, fallback to framework autoload if needed
+         *      composer → use Composer only (recommended updating composer psr4 mapping)
+         *      framework → use custom loader only
          *
-         * The following files and directories remain local:
-         * `system/plugins/*`, `system/Boot.php`, `app/*`, `routes/*`,
-         * `resource/*`, and all other application-related files.
+         * Rules:
+         * - Only system/bootstrap may be shared
+         * - Application code (app, routes, storage) must remain local
+         * - Version mismatch may cause runtime instability
          *
-         *
-         * Ensure the target release satisfies the version constraint. An
-         * incompatible framework version may cause runtime errors.
-         *
-         * @link https://luminova.ng/docs/0.0.0/boot/phpvci
-         * @link https://github.com/phpvci/admin
-         * @link https://github.com/phpvci/phpvci
+         * @link https://luminova.ng/docs/0.0.0/boot/shared-modules
          *
          * @return array{
          *     enabled: bool,
+         *     autoloader: 'auto'|'composer'|'framework',
          *     version: string,
          *     paths: array{
          *         root: string,
@@ -2362,6 +2501,7 @@ final class PHPVCI
 
         $conf ??= [
             'enabled'      => true,
+            'autoloader'   => 'auto',
             'version'      => '>=3.8',
             'paths'        => [
                 'root'   => '',
