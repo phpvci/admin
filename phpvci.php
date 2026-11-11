@@ -12,8 +12,8 @@ ini_set('display_startup_errors', '0');
 define('PACKAGE_NAME', 'luminovang/framework');
 define('__SELF__',                  $_SERVER['PHP_SELF']);
 define('PROJECT_APP_ROOT',           rtrim(realpath(__DIR__ . '/../'), '/\\') . '/');
-define('PATH_ADMIN_CONFIG_FILE',     PROJECT_APP_ROOT . '.phpvci.admin.php');
-define('PATH_APP_VER_CONFIG_FILE',   PROJECT_APP_ROOT . '.phpvci.php');
+define('PHPVCI_ADMIN_CONFIG',        PROJECT_APP_ROOT . '.phpvci.admin.php');
+define('PHPVCI_PACKAGE_CONFIG',      PROJECT_APP_ROOT . '.phpvci.php');
 define('PATH_COMPOSER_JSON',         PROJECT_APP_ROOT . 'composer.json');
 define('TMPDIR',                     PROJECT_APP_ROOT . 'writeable/tmp/phpvci');
 define('PATH_LOGS',                  PROJECT_APP_ROOT . 'writeable/logs/phpvci.log');
@@ -252,12 +252,12 @@ function _verify_binary(string $bin, bool $phpWrapper = false): bool
 
 // ══════════════════════════════════════════════════════════════
 // BOOTSTRAP ADMIN CONFIG
-// Values stored in PATH_ADMIN_CONFIG_FILE override the defaults below.
+// Values stored in PHPVCI_ADMIN_CONFIG override the defaults below.
 // ══════════════════════════════════════════════════════════════
 $_admin = [];
 
-if (@is_file(PATH_ADMIN_CONFIG_FILE)) {
-    $_admin = include PATH_ADMIN_CONFIG_FILE;
+if (@is_file(PHPVCI_ADMIN_CONFIG)) {
+    $_admin = include PHPVCI_ADMIN_CONFIG;
 }
 
 define('ADMIN_PASSWORD_HASH',  $_admin['password_hash'] ?? DEFAULT_PASSWORD_HASH);
@@ -1077,7 +1077,7 @@ final class PHPVCI
     /**
      * Load and cache the persisted VCI admin configuration array.
      *
-     * Reads {@see PATH_ADMIN_CONFIG_FILE} on the first call and caches the result
+     * Reads {@see PHPVCI_ADMIN_CONFIG} on the first call and caches the result
      * in-request. Subsequent calls within the same request return the cached value
      * without touching the filesystem.
      *
@@ -1092,8 +1092,8 @@ final class PHPVCI
      */
     public static function getAdminConf(): array
     {
-        if(is_file(PATH_ADMIN_CONFIG_FILE) && empty(self::$cache['admin.conf'])){
-            self::$cache['admin.conf'] = include PATH_ADMIN_CONFIG_FILE;
+        if(is_file(PHPVCI_ADMIN_CONFIG) && empty(self::$cache['admin.conf'])){
+            self::$cache['admin.conf'] = include PHPVCI_ADMIN_CONFIG;
         }
 
         return self::$cache['admin.conf'] ?? [];
@@ -1194,7 +1194,7 @@ final class PHPVCI
         if (!self::writeAdminConf($packagesDir, $phpVciPath, $composerBin, $phpBin, $passwordHash)) {
             self::setData(
                 'setup_error',
-                'Could not write ' . PATH_ADMIN_CONFIG_FILE . ' — check directory permissions.'
+                'Could not write ' . PHPVCI_ADMIN_CONFIG . ' — check directory permissions.'
             );
             self::redirect($query);
         }
@@ -1236,7 +1236,7 @@ final class PHPVCI
 
         $data = "<?php\nreturn " . var_export(self::$cache['admin.conf'], true) . ";\n";
 
-        return file_put_contents(PATH_ADMIN_CONFIG_FILE, $data) !== false;
+        return file_put_contents(PHPVCI_ADMIN_CONFIG, $data) !== false;
     }
 
     /** Start a secure session and generate a CSRF token when needed. */
@@ -1365,7 +1365,12 @@ final class PHPVCI
         $minutes = intdiv($seconds, 60);
         $seconds = $seconds % 60;
 
-        return sprintf('%02d:%02d of %d min', $minutes, $seconds, floor(SESSION_LIFETIME / 60));
+        return sprintf(
+            '%02d:%02d of %d min', 
+            $minutes, 
+            $seconds, 
+            floor(SESSION_LIFETIME / 60)
+        );
     }
 
     /**
@@ -1784,8 +1789,8 @@ final class PHPVCI
      */
     public static function appConf(?string $key = null): mixed
     {
-        if (!isset(self::$cache['appConf']) && is_file(PATH_APP_VER_CONFIG_FILE)) {
-            self::$cache['appConf'] = include PATH_APP_VER_CONFIG_FILE;
+        if (!isset(self::$cache['appConf']) && is_file(PHPVCI_PACKAGE_CONFIG)) {
+            self::$cache['appConf'] = include PHPVCI_PACKAGE_CONFIG;
         }
 
         if (!is_array(self::$cache['appConf'])) {
@@ -2255,8 +2260,8 @@ final class PHPVCI
      */
     private static function resetSetup(): void 
     {
-        if(is_file(PATH_ADMIN_CONFIG_FILE)){
-            @unlink(PATH_ADMIN_CONFIG_FILE);
+        if(is_file(PHPVCI_ADMIN_CONFIG)){
+            @unlink(PHPVCI_ADMIN_CONFIG);
         }
 
         self::logout();
@@ -2572,7 +2577,7 @@ final class PHPVCI
          */
         COMMENT;
 
-        if (is_file(PATH_APP_VER_CONFIG_FILE)) {
+        if (is_file(PHPVCI_PACKAGE_CONFIG)) {
             $conf = self::appConf();
         }
 
@@ -2594,12 +2599,12 @@ final class PHPVCI
 
         $content = "<?php\n{$comment}\nreturn " . var_export($conf, true) . ";\n";
 
-        if (!is_writable(PATH_APP_VER_CONFIG_FILE)) {
+        if (!is_writable(PHPVCI_PACKAGE_CONFIG)) {
             $err = 'Error ".phpvci.php" file is not writable.';
             return false;
         }
 
-        if(file_put_contents(PATH_APP_VER_CONFIG_FILE, $content) !== false){
+        if(file_put_contents(PHPVCI_PACKAGE_CONFIG, $content) !== false){
             return true;
         }
 
@@ -2693,7 +2698,7 @@ final class PHPVCI
     public static function initRuntimeState(): array
     {
         [$packagesDir, $phpvciBin] = self::getPaths();
-        $needsSetup = ($packagesDir === '') || !file_exists(PATH_ADMIN_CONFIG_FILE);
+        $needsSetup = ($packagesDir === '') || !file_exists(PHPVCI_ADMIN_CONFIG);
 
         return [
             'packages'      => $packagesDir,
