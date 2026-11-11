@@ -11,7 +11,7 @@ ini_set('display_startup_errors', '0');
 // ══════════════════════════════════════════════════════════════
 define('PACKAGE_NAME', 'luminovang/framework');
 define('__SELF__',                  $_SERVER['PHP_SELF']);
-define('PROJECT_APP_ROOT',           rtrim(realpath(__DIR__ . '/../'), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR);
+define('PROJECT_APP_ROOT',           rtrim(realpath(__DIR__ . '/../'), '/\\') . '/');
 define('PATH_ADMIN_CONFIG_FILE',     PROJECT_APP_ROOT . '.phpvci.admin.php');
 define('PATH_APP_VER_CONFIG_FILE',   PROJECT_APP_ROOT . '.phpvci.php');
 define('PATH_COMPOSER_JSON',         PROJECT_APP_ROOT . 'composer.json');
@@ -288,8 +288,9 @@ final class PHPVCI
     private const COMPOSER_UPDATE_MESSAGES = [
         1  => 'Composer autoload configuration updated successfully.',
         0  => 'Failed to read or parse composer.json.',
-        2  => 'composer.json is not readable or writable.',
-        3  => 'composer.json permission denied.',
+        2  => 'composer.json file not found.',
+        3  => 'composer.json does not have readable permission.',
+        4  => 'composer.json does not have writable permission.',
         -1 => 'Failed to write updated composer.json.',
     ];
 
@@ -1326,6 +1327,11 @@ final class PHPVCI
             && (time() - (int) self::getData('auth_at')) < SESSION_LIFETIME;
     }
 
+    /**
+     * Undocumented function
+     *
+     * @return integer
+     */
     public static function getRemainingSessionTime(): int
     {
         $authAt = (int) self::getData('auth_at', 0);
@@ -1429,22 +1435,24 @@ final class PHPVCI
         $removed = 0;
         $isSystemRoot = basename($dir) === 'system';
 
-        // if (!is_writable($dir)) {
-        //     @chmod($dir, 0755);
-        // }
-
         // $iterator = new RecursiveIteratorIterator(
         //     new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
         //     RecursiveIteratorIterator::CHILD_FIRST
         // );
 
         foreach (new FilesystemIterator($dir, FilesystemIterator::SKIP_DOTS) as $item) {
-            $path = $item->getPathname();
-            $name = $item->getFilename();
-
-            if ($isSystemRoot && in_array($name, $allowed, true)) {
+            if (
+                $isSystemRoot 
+                && in_array($item->getFilename(), $allowed, true)
+            ) {
                 continue;
             }
+
+            $path = $item->getPathname();
+
+            // if (!is_writable($path)) {
+            //     @chmod($path, 0755);
+            // }
 
             if ($item->isDir() && !$item->isLink()) {
                 $removed += self::deleteFiles($path);
@@ -1544,7 +1552,7 @@ final class PHPVCI
             }
 
             foreach ($checks as $file) {
-                if(is_file($dir . DIRECTORY_SEPARATOR . $file)){
+                if(is_file($dir . '/' . $file)){
                     return self::$cache['is_conflict'] = true;
                 }
             }
@@ -1837,7 +1845,7 @@ final class PHPVCI
 
         self::switchHeader($version, $state);
 
-        $packagesDir = rtrim($state['packages'], DIRECTORY_SEPARATOR);
+        $packagesDir = rtrim($state['packages'], '/\\');
         $newPath = match($version) {
             'current' => "{$packagesDir}/current",
             default   => "{$packagesDir}/releases/{$version}"
@@ -1853,7 +1861,7 @@ final class PHPVCI
         $metadata = self::restoreMetadata($newPath, $log);
 
         if($metadata === 0){
-             $log[] = "Check project file permission.";
+            $log[] = "Check project file permission.";
             self::json(false, implode("\n", $log));
         }
 
@@ -1868,13 +1876,16 @@ final class PHPVCI
         $log[] = '';
 
         $status = self::updateComposerJson($newPath);
+
         $log[] = self::COMPOSER_UPDATE_MESSAGES[$status] 
             ?? "Unknown composer update status: {$status}";
         $log[] = '';
 
-        $composer = self::optimizeAutoload();
+        $composer = ($status === 1) 
+            ? self::optimizeAutoload() 
+            : ['code' => 1];
 
-        $log[]   = $composer['output'];
+        $log[]   = $composer['output'] ?? '';
         $success = $updated && $composer['code'] === 0;
 
         self::json($success, implode("\n", $log));
@@ -2044,11 +2055,15 @@ final class PHPVCI
         }
 
         $removed = self::removeModules();
+        $log = [];
 
         if($removed === 0){
+            $log[] = 'No files were removed. Check directory permissions and try again.';
+            $log[] = self::getLastError();
+
             self::json(
                 false, 
-                'No files were removed. Check directory permissions and try again.'
+                implode("\n", $log)
             );
         }
 
@@ -2081,7 +2096,7 @@ final class PHPVCI
 
         self::switchHeader($version, $state);
 
-        $packagesDir = rtrim($state['packages'], DIRECTORY_SEPARATOR);
+        $packagesDir = rtrim($state['packages'], '/\\');
 
         $newPath = ($version === 'current')
             ? (
@@ -2133,7 +2148,7 @@ final class PHPVCI
 
                 if (
                     $relPath === 'plugins'
-                    || str_starts_with($relPath, 'plugins' . DIRECTORY_SEPARATOR)
+                    || str_starts_with($relPath, 'plugins/')
                 ) {
                     continue;
                 }
@@ -2210,7 +2225,7 @@ final class PHPVCI
         $log[] = "Successfully imported {$imported} files.";
         $log[] = '';
 
-        $status = self::updateComposerJson(null);
+        $status = self::updateComposerJson();
 
         $log[] = self::COMPOSER_UPDATE_MESSAGES[$status]
             ?? "Unknown composer update status: {$status}";
@@ -2271,11 +2286,15 @@ final class PHPVCI
     private static function readComposerJson(): array|int
     {
         if (!is_file(PATH_COMPOSER_JSON)) {
-            return 0;
+            return 2;
         }
 
-        if (!is_readable(PATH_COMPOSER_JSON) || !is_writable(PATH_COMPOSER_JSON)) {
-            return 2;
+        if(!is_readable(PATH_COMPOSER_JSON)){
+            return 3;
+        }
+
+        if(!is_writable(PATH_COMPOSER_JSON)){
+            return 4;
         }
 
         try {
@@ -2316,7 +2335,7 @@ final class PHPVCI
      *
      * @return int Status code as described above.
      */
-    private static function updateComposerJson(?string $newPath): int
+    private static function updateComposerJson(?string $newPath = null): int
     {
         $json = self::readComposerJson();
 
@@ -2332,15 +2351,17 @@ final class PHPVCI
 
         $updateVer = false;
         $changes = 0;
+
         $ver = self::$cache['admin.conf']['target_ver'] ?? "^3.7";
         $package = self::$cache['admin.conf']['package_name'] ?? PACKAGE_NAME;
+        $hasPackage = isset($json['require'][$package]);
 
         if($newPath === null){
-            if (!isset($json['require'][$package])) {
+            if (!$hasPackage) {
                 $json['require'][$package] = $ver;
                 $changes = 1;
             }
-        }elseif (isset($json['require'][$package])) {
+        }elseif ($hasPackage) {
             $updateVer = true;
             self::$cache['admin.conf']['target_ver'] = $json['require'][$package] 
                 ?? $ver;
@@ -2349,54 +2370,64 @@ final class PHPVCI
         }
 
         $newPsr4 = [];
+        array (
+            'Luminova\\Funcs\\' => 
+            array (
+                0 => 'bootstrap/Funcs/',
+            ),
+            'Luminova\\' => 
+            array (
+                0 => 'system/',
+            ),
+            'App\\' => 'app/',
+        );
 
         foreach ($psr4 as $namespace => $path) {
 
             $trimmed = ltrim($namespace, '\\');
 
-            if (!str_starts_with($trimmed, 'Luminova\\')) {
-                $newPsr4[$namespace] = $path;
-                continue;
-            }
-
             $suffix = match (true) {
                 str_starts_with($trimmed, 'Luminova\\Funcs\\') => 'bootstrap/Funcs/',
+                $trimmed === 'Luminova',
                 $trimmed === 'Luminova\\' => 'system/',
                 default => null
             };
 
             if ($suffix === null) {
-                $newPsr4[$namespace] = $path;
+                self::addPsr($path, $namespace, $newPsr4);
                 continue;
             }
 
+            $paths = is_array($path) ? $path : [$path];
+
             if($newPath === null){
-                if ($path === $suffix || $path === [$suffix]) {
-                    $newPsr4[$namespace] = $path;
+                if(in_array($suffix, $paths, true)){
+                    self::addPsr($path, $namespace, $newPsr4);
                     continue;
                 }
 
-                $newPsr4[$namespace] = [$suffix];
+                $newPsr4[$namespace][] = $suffix;
                 $changes++;
                 continue;
             }
 
-            if ($path === [$suffix, "{$newPath}/{$suffix}"]) {
-                $newPsr4[$namespace] = $path;
+            $vciPackage = "{$newPath}/{$suffix}";
+
+            if (in_array($vciPackage, $paths, true)) {
+                self::addPsr($path, $namespace, $newPsr4);
                 continue;
             }
 
-            $newPsr4[$namespace] = [
-                $suffix,
-                "{$newPath}/{$suffix}"
-            ];
-
+            $newPsr4[$namespace][] = $suffix;
+            $newPsr4[$namespace][] = $vciPackage;
             $changes++;
         }
 
         if ($changes === 0) {
             return 1;
         }
+
+        self::removeOldVciPsr($newPsr4, $newPath);
 
         uksort($newPsr4, fn($a, $b) => strlen($b) <=> strlen($a));
 
@@ -2409,7 +2440,7 @@ final class PHPVCI
 
         $tmp = PATH_TMP . '/composer.json.tmp';
 
-        if (file_put_contents($tmp, $encoded, LOCK_EX) === false) {
+        if (@file_put_contents($tmp, $encoded, LOCK_EX) === false) {
             return -1;
         }
 
@@ -2423,6 +2454,53 @@ final class PHPVCI
         }
 
         return 1;
+    }
+
+    private static function removeOldVciPsr(
+        array &$newPsr4, 
+        ?string $newPath = null
+    ): void 
+    {
+        if($newPath === null){
+            return;
+        }
+
+        $newPath = ltrim($newPath, '/\\');
+
+        foreach($newPsr4 as $namespace => $psr){
+            foreach($psr as $i => $path){
+                $path = ltrim($path, '/\\');
+
+                if(
+                    (
+                        $path !== 'bootstrap/Funcs/'
+                        && !str_starts_with($path, $newPath)
+                        && str_ends_with($path, 'bootstrap/Funcs/')
+                    )
+                    || 
+                    (
+                        $path !== 'system/'
+                        && !str_starts_with($path, $newPath)
+                        && str_ends_with($path, 'system/')
+                    )
+                ) {
+                    unset($newPsr4[$namespace][$i]);
+                }
+            }
+        }
+    }
+
+    private static function addPsr(
+        array|string $values, 
+        string $namespace, 
+        array &$newPsr4
+    ): void 
+    {
+        $paths = is_array($values) ? $values : [$values];
+
+        foreach($paths as $path){
+            $newPsr4[$namespace][] = $path;
+        }
     }
 
     /**
@@ -2488,7 +2566,6 @@ final class PHPVCI
          *     autoloader: 'auto'|'composer'|'framework',
          *     version: string,
          *     paths: array{
-         *         root: string,
          *         target: string
          *     }
          * }
@@ -2504,7 +2581,6 @@ final class PHPVCI
             'autoloader'   => 'auto',
             'version'      => '>=3.8',
             'paths'        => [
-                'root'   => '',
                 'target' => '',
             ],
         ];
@@ -2513,19 +2589,21 @@ final class PHPVCI
 
         $conf['enabled'] = !$isLocal;
         $conf['paths'] = [
-            'root'   => $packagesDir,
             'target' => $newPath ?? $oldPath
         ];
 
         $content = "<?php\n{$comment}\nreturn " . var_export($conf, true) . ";\n";
 
+        if (!is_writable(PATH_APP_VER_CONFIG_FILE)) {
+            $err = 'Error ".phpvci.php" file is not writable.';
+            return false;
+        }
+
         if(file_put_contents(PATH_APP_VER_CONFIG_FILE, $content) !== false){
             return true;
         }
 
-        if (!is_writable(PATH_APP_VER_CONFIG_FILE)) {
-            $err = 'Error ".phpvci.php" file is not writable.';
-        }
+        $err = 'Error failed to update ".phpvci.php".';
 
         return false;
     }
@@ -2533,7 +2611,7 @@ final class PHPVCI
     /**
      * Execute a shell command and return its output and exit code.
      *
-     * @return array{output: string, code: int}
+     * @return array{output:string,code:int}
      */
     private static function runCommand(string $cmd): array
     {
@@ -2595,8 +2673,8 @@ final class PHPVCI
             return false;
         }
 
-        $base = rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-        $target = rtrim($target, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        $base = rtrim($base, '/\\') . '/';
+        $target = rtrim($target, '/\\') . '/';
 
         return str_starts_with($target, $base);
     }
