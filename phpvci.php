@@ -15,7 +15,7 @@ define('PROJECT_APP_ROOT',           rtrim(realpath(__DIR__ . '/../'), '/\\') . 
 define('PATH_ADMIN_CONFIG_FILE',     PROJECT_APP_ROOT . '.phpvci.admin.php');
 define('PATH_APP_VER_CONFIG_FILE',   PROJECT_APP_ROOT . '.phpvci.php');
 define('PATH_COMPOSER_JSON',         PROJECT_APP_ROOT . 'composer.json');
-define('PATH_TMP',                   PROJECT_APP_ROOT . 'writeable/tmp/phpvci');
+define('TMPDIR',                     PROJECT_APP_ROOT . 'writeable/tmp/phpvci');
 define('PATH_LOGS',                  PROJECT_APP_ROOT . 'writeable/logs/phpvci.log');
 
 // ══════════════════════════════════════════════════════════════
@@ -47,15 +47,15 @@ define('COMPOSER_PHAR_VERSION',  'latest-stable');
 // ══════════════════════════════════════════════════════════════
 // TEMP DIRECTORY CONFIGURATION — ensures a writable temp directory is available.
 // ══════════════════════════════════════════════════════════════
-if (!is_dir(PATH_TMP)) {
-    mkdir(PATH_TMP, 0777, true);
+if (!is_dir(TMPDIR)) {
+    mkdir(TMPDIR, 0777, true);
 }
 
-chmod(PATH_TMP, 01777);
-ini_set('sys_temp_dir', PATH_TMP);
-putenv('TMPDIR=' . PATH_TMP);
-putenv('TMP=' . PATH_TMP);
-putenv('TEMP=' . PATH_TMP);
+chmod(TMPDIR, 01777);
+ini_set('sys_temp_dir', TMPDIR);
+putenv('TMPDIR=' . TMPDIR);
+putenv('TMP=' . TMPDIR);
+putenv('TEMP=' . TMPDIR);
 
 // ══════════════════════════════════════════════════════════════
 // Error handling
@@ -2438,7 +2438,7 @@ final class PHPVCI
             return 0;
         }
 
-        $tmp = PATH_TMP . '/composer.json.tmp';
+        $tmp = TMPDIR . '/composer.json.tmp';
 
         if (@file_put_contents($tmp, $encoded, LOCK_EX) === false) {
             return -1;
