@@ -43,7 +43,6 @@ define('SESSION_REGENERATE_ID',    0);
  */
 define('COMPOSER_PHAR_VERSION',  'latest-stable');
 
-
 // ══════════════════════════════════════════════════════════════
 // TEMP DIRECTORY CONFIGURATION — ensures a writable temp directory is available.
 // ══════════════════════════════════════════════════════════════
